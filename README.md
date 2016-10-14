@@ -10,9 +10,11 @@ Download, compile in Arduino, upload to Arduboy, enjoy.
 ###Menu
 - Directional keys to navigate and select
 - A or B to start the game
+
 ### Game
 - Up/down to steer the left paddle 
 - A/B to steer the right paddle (in 2 players mode)
+
 ### Settings
 - Mode - who plays against whom
  - 1 player - left paddle controlled by a human, right paddle by Arduboy (default)
