@@ -1,3 +1,46 @@
+/*********************************************************************
+ This is an example for our nRF52 based Bluefruit LE modules
+
+ Pick one up today in the adafruit shop!
+
+ Adafruit invests time and resources providing this open source code,
+ please support Adafruit and open-source hardware by purchasing
+ products from Adafruit!
+
+ MIT license, check LICENSE for more information
+ All text above, and the splash screen below must be included in
+ any redistribution
+*********************************************************************/
+
+#include <Arduboy2.h>
+#include <bluefruit.h>
+
+// OTA DFU service
+BLEDfu bledfu;
+
+// Uart over BLE service
+BLEUart bleuart;
+
+// Function prototypes for packetparser.cpp
+uint8_t readPacket (BLEUart *ble_uart, uint16_t timeout);
+float   parsefloat (uint8_t *buffer);
+void    printHex   (const uint8_t * data, const uint32_t numBytes);
+
+// Packet buffer
+extern uint8_t packetbuffer[];
+
+// Buttons
+uint8_t player2Buttons = 0;
+
+#define P2_1_BUTTON       1
+#define P2_2_BUTTON       2
+#define P2_3_BUTTON       4
+#define P2_4_BUTTON       8
+#define P2_UP_BUTTON     16
+#define P2_DOWN_BUTTON   32
+#define P2_LEFT_BUTTON   64
+#define P2_RIGHT_BUTTON 128
+
 /*
  * ArduBOYNG
  * 
@@ -74,9 +117,7 @@
   *     o 0%, 1% (Voreintesllung), 3%, 5%
   */
 
-#include "Arduboy.h"
-
-Arduboy arduboy;
+Arduboy2 arduboy;
 
 const boolean debug = false;
 
@@ -87,7 +128,6 @@ const String UNTERTITEL = "v0.81";                            // Titelbildschirm
 const int BALL_DURCHMESSER = 3;                               // "Durchmesser" des Balls in Pixel - der Ball ist in Wirklichkeit ein Quadrat mit dieser Seitenlänge in Pixel.     
 const int SCHLAEGER_BREITE = 15;                              // Breite der Schläger in Pixel.
 const float TREFFERLAENGE_HALBE = ( SCHLAEGER_BREITE + BALL_DURCHMESSER ) / 2;   // Anschaulich die Hälfte der effektiven "Trefferlänge" des Schlägers. Dabei sind Treffer auch dann gegeben, wenn der Ball ober- oder unterhalb des Schlägers ist, aber den Schläger gerade noch berührt. Wird zur Berechung des Abprallwinkels benötigt.
-const int FPS = 60;                                           // Bildschirmzeichnungen pro Sekunde, "frames per second".
 const boolean SPIELFELDRAND = true;                           // Ob Spielfeldrand gezeichnet wird (true) oder nicht (true). Hinweis: Zur Zeit _mit_ Spielfeldrand programmiert. Für Variante ohne Spielfeldrand müsste (eigentlich) noch die Spielfeldgrenzen, Ball-/Schläger-Mini/Maxima umdefiniert werden.
 const int COUNTDOWN_VERZOEGERUNG = 1000;                      // Wartezeit zwischen den Countdown-Zahlen in ms
 const int GAMEOVER_VERZOEGERUNG = 5000;                       // Extra Wartezeit nach Spielende in ms (vor Zurückschalten zum Titel / Menü)
@@ -178,25 +218,53 @@ const int PUNKTE2_Y = PUNKTE1_Y;                              // Position Punkte
 
 // Töne für verschiedene Vorkommnisse. Jeweils Frequenz und Dauer.
 boolean sound;                                                // Töne an (true) oder aus (false). Default = false. Wird auf Default gesetzt vor Menüauswahl und während Menüauswahl je nach Einstellung geändert.
-const int TON_COUNTDOWN_FREQ = 880;                           // Countdown vor Anstoß
+const int TON_COUNTDOWN_FREQ = 1899;                          // 880 Countdown vor Anstoß
 const int TON_COUNTDOWN_DAUER = 100;
-const int TON_SCHLAEGER_FREQ = 440;                           // Abprall am Schläger
+const int TON_SCHLAEGER_FREQ = 1750;                          // 440 Abprall am Schläger
 const int TON_SCHLAEGER_DAUER = 200;
-const int TON_PUNKT_FREQ = 110;                               // Punktgewinn (bzw. Ball durchgelassen für den anderen Spieler)
+const int TON_PUNKT_FREQ = 854;                               // 110 Punktgewinn (bzw. Ball durchgelassen für den anderen Spieler)
 const int TON_PUNKT_DAUER = 1000;
-const int TON_RAND_FREQ = 1320;                               // Abprall am Rand
+const int TON_RAND_FREQ = 1949;                               // 1320 Abprall am Rand
 const int TON_RAND_DAUER = 50;
-const int TON_GAMEOVER_FREQ = 220;                            // Spiel beendet  
+const int TON_GAMEOVER_FREQ = 1452;                           // 220 Spiel beendet  
 const int TON_GAMEOVER_DAUER = 2000;
 const int TON_KICKOFF_FREQ = TON_RAND_FREQ;                   // Anstoß
 const int TON_KICKOFF_DAUER = TON_RAND_DAUER;
-const int TON_MENUE_FREQ = 1320;                              // Klick im Menü
+const int TON_MENUE_FREQ = 1949;                              // 1320 Klick im Menü
 const int TON_MENUE_DAUER = 50;
 
 // Steuervariablen
 boolean gameover = false;                                     // Steuervariable: Falls ein Spieler die Gewinnpunktzahl erreicht, wird gameover=true gesetzt und damit die Gameoversequenz und der Neustart initiiert.
 boolean intro = true;                                         // Steuervariable: Ob der Titel- und Menüschirm angezeigt werden soll.
 boolean anstoss = true;                                       // Steuervariable: Am Spielbeginn und nach jedem Punktgewinn erfolgt ein Anstoss
+
+void startAdv(void)
+{
+  // Advertising packet
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  
+  // Include the BLE UART (AKA 'NUS') 128-bit UUID
+  Bluefruit.Advertising.addService(bleuart);
+
+  // Secondary Scan Response packet (optional)
+  // Since there is no room for 'Name' in Advertising packet
+  Bluefruit.ScanResponse.addName();
+
+  /* Start Advertising
+   * - Enable auto advertising if disconnected
+   * - Interval:  fast mode = 20 ms, slow mode = 152.5 ms
+   * - Timeout for fast mode is 30 seconds
+   * - Start(timeout) with timeout = 0 will advertise forever (until connected)
+   * 
+   * For recommended advertising interval
+   * https://developer.apple.com/library/content/qa/qa1931/_index.html   
+   */
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.setInterval(32, 244);    // in unit of 0.625 ms
+  Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
+  Bluefruit.Advertising.start(0);                // 0 = Don't stop advertising after n seconds  
+}
 
 // Setze Variablen vor Spielstart
 //   - Übersetze Menüauswahl in Variablenwerte
@@ -312,13 +380,13 @@ void zeige_startschirm_und_fuehre_menue_aus() {
     sound = MENUE_SOUND_WERTE[menueAuswahlen[3]];             // Sound wird hier bereits aus Menüauswahl übernommen, damit beim Menüklicken entsprechend ein Ton gespielt wird oder nicht
     // Starttasten (A und B) führen zum Abbruch der Menüschleife
     if ( arduboy.pressed(A_BUTTON) || arduboy.pressed(B_BUTTON) ) { 
-      if (sound) arduboy.tunes.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
+      if (sound) arduboy.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
 //      delay(COUNTDOWN_VERZOEGERUNG);
       warteAufStarttaste = false;
     }
     // "Runter-Knopf" blättert in die nächste Menüzeile
     if ( arduboy.pressed(DOWN_BUTTON) ) {
-      if (sound) arduboy.tunes.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
+      if (sound) arduboy.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
       menueZeile++;
       if ( menueZeile > MENUE_ZEILEN ) {
         // menueZeile = 0; // scroll over to beginning
@@ -329,7 +397,7 @@ void zeige_startschirm_und_fuehre_menue_aus() {
     }
     // "Hoch-Knopf" blättert in die vorherige Menüzeile
     if ( arduboy.pressed(UP_BUTTON) ) {
-      if (sound) arduboy.tunes.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
+      if (sound) arduboy.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
       menueZeile--;
       if ( menueZeile < 0 ) {
         // menueZeile = MENUE_ZEILEN; // scroll over to end
@@ -340,7 +408,7 @@ void zeige_startschirm_und_fuehre_menue_aus() {
     }
     // "Rechts-Knopf" wählt in der aktuellen Menüzeile die nächste Auswahlmöglichkeit aus
     if ( arduboy.pressed(RIGHT_BUTTON) ) {
-      if (sound) arduboy.tunes.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
+      if (sound) arduboy.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
       menueAuswahlen[menueZeile]++;
       if ( menueAuswahlen[menueZeile] > MENUE_AUSWAHLMOEGLICHKEITEN[menueZeile] ) {
         menueAuswahlen[menueZeile] = 0; // scroll over to beginning
@@ -351,7 +419,7 @@ void zeige_startschirm_und_fuehre_menue_aus() {
     }
     // "Links-Knopf" wählt in der aktuellen Menüzeile die vorherige Auswahlmöglichkeit aus
     if ( arduboy.pressed(LEFT_BUTTON) ) {
-      if (sound) arduboy.tunes.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
+      if (sound) arduboy.tone (TON_MENUE_FREQ, TON_MENUE_DAUER);
       menueAuswahlen[menueZeile]--;
       if ( menueAuswahlen[menueZeile] < 0 ) {
         menueAuswahlen[menueZeile] = MENUE_AUSWAHLMOEGLICHKEITEN[menueZeile]; // scroll over to end
@@ -378,7 +446,7 @@ void zeige_spielende() {
     arduboy.print("Winner");
   } 
   arduboy.display();
-  if (sound) arduboy.tunes.tone(TON_GAMEOVER_FREQ,TON_GAMEOVER_DAUER);
+  if (sound) arduboy.tone(TON_GAMEOVER_FREQ,TON_GAMEOVER_DAUER);
   delay(GAMEOVER_VERZOEGERUNG);
 }
 
@@ -420,12 +488,12 @@ void bewege_ball(){
     xb = XB_MIN;
   }
   if ( yb > YB_MAX ) {                                        // Pralle vom unteren Rand ab
-    if (sound) arduboy.tunes.tone(TON_RAND_FREQ,TON_RAND_DAUER);
+    if (sound) arduboy.tone(TON_RAND_FREQ,TON_RAND_DAUER);
     dyb = -dyb;
     yb = YB_MAX;
   }
   if ( yb < YB_MIN ) {                                        // Pralle vom oberen Rand ab
-    if (sound) arduboy.tunes.tone(TON_RAND_FREQ,TON_RAND_DAUER);
+    if (sound) arduboy.tone(TON_RAND_FREQ,TON_RAND_DAUER);
     dyb = -dyb;
     yb = YB_MIN;
   }
@@ -452,11 +520,11 @@ void bewege_schlaeger() {
     ys1=ys1+DYS1;
     if ( ys1 > YS_MAX ) ys1 = YS_MAX;
   }
-  if ( arduboy.pressed(B_BUTTON) ) {                          // Bewege rechten Schläger hoch
+  if ( player2Buttons & P2_UP_BUTTON ) {                      // Bewege rechten Schläger hoch
     ys2=ys2-DYS2;
     if ( ys2 < YS_MIN ) ys2 = YS_MIN;
   }
-  if ( arduboy.pressed(A_BUTTON) ) {                          // Bewege rechten Schläger runter
+  if ( player2Buttons & P2_DOWN_BUTTON ) {                    // Bewege rechten Schläger runter
     ys2=ys2+DYS2;
     if ( ys2 > YS_MAX ) ys2 = YS_MAX;
   }
@@ -513,7 +581,7 @@ void pruefe_treffer() {
   // Wenn Ball ganz links
   if ( xb <= XB_MIN ) {
     if ( ( yb + BALL_DURCHMESSER < ys1 ) || ( yb > ys1 + SCHLAEGER_BREITE ) ) {   // Falls linker Schläger nicht den Ball trifft...
-      if (sound) arduboy.tunes.tone(TON_PUNKT_FREQ,TON_PUNKT_DAUER);  
+      if (sound) arduboy.tone(TON_PUNKT_FREQ,TON_PUNKT_DAUER);  
       punkte2++;                                                                  // ... erhöhe Punkte für Gegner
       if (punkte2 < punkteMax) delay(PUNKTGEWINN_VERZOEGERUNG);                   // ... warte kurz mit dem Countdown (falls Spiel noch nicht zu Ende)    
       dxbVorzeichen = +1;                                                         // ... setze Richtung für den nächsten Abschlag auf "nach rechts"
@@ -521,7 +589,7 @@ void pruefe_treffer() {
       yb = YB_ABSCHLAG;                                                           // ... setze den Ball auf die Abschlagsposition (y in der Mitte)
       setze_variablen_nach_punktgewinn();                                         // ... und bereite für nächsten Anstoß vor
     } else {                                                                      // Falls getroffen...
-      if (sound) arduboy.tunes.tone(TON_SCHLAEGER_FREQ,TON_SCHLAEGER_DAUER);      
+      if (sound) arduboy.tone(TON_SCHLAEGER_FREQ,TON_SCHLAEGER_DAUER);      
       ybMitte = yb + BALL_DURCHMESSER / 2;                                        // ... setze Hilfsvariablen
       ys1Mitte = ys1 + SCHLAEGER_BREITE / 2;
       diff1Mitte = ybMitte - ys1Mitte;                                            // ... berechne neue Ballrichtung als Funktion der "Trefferposition"...
@@ -534,7 +602,7 @@ void pruefe_treffer() {
   // Wenn Ball ganz rechts
   if ( xb >= XB_MAX ) {
     if ( ( yb + BALL_DURCHMESSER < ys2 ) || ( yb > ys2 + SCHLAEGER_BREITE ) ) {   // Falls linker Schläger nicht den Ball trifft...
-      if (sound) arduboy.tunes.tone(TON_PUNKT_FREQ,TON_PUNKT_DAUER);
+      if (sound) arduboy.tone(TON_PUNKT_FREQ,TON_PUNKT_DAUER);
       punkte1++;                                                                  // ... erhöhe Punkte für Gegner
       if (punkte1 < punkteMax) delay(PUNKTGEWINN_VERZOEGERUNG);                     // ... warte kurz mit dem Countdown (falls Spiel noch nicht zu Ende)    
       dxbVorzeichen = -1;                                                         // ... setze Richtung für den nächsten Abschlag auf "nach links"
@@ -542,7 +610,7 @@ void pruefe_treffer() {
       yb = YB_ABSCHLAG;                                                           // ... setze den Ball auf die Abschlagsposition (y in der Mitte)
       setze_variablen_nach_punktgewinn();                                         // ... und bereite für nächsten Anstoß vor
     } else {                                                                      // Falls getroffen...
-      if (sound) arduboy.tunes.tone(TON_SCHLAEGER_FREQ,TON_SCHLAEGER_DAUER);
+      if (sound) arduboy.tone(TON_SCHLAEGER_FREQ,TON_SCHLAEGER_DAUER);
       ybMitte = yb + BALL_DURCHMESSER / 2;                                        // ... setze Hilfsvariablen
       ys2Mitte = ys2 + SCHLAEGER_BREITE / 2;
       diff2Mitte = ybMitte - ys2Mitte;                                            // ... berechne neue Ballrichtung als FUnktoin der "Trefferposition"...
@@ -575,10 +643,10 @@ void fuehre_anstoss_aus() {
     arduboy.setCursor( 61, 28 );
     arduboy.print(k);
     arduboy.display();
-    if (sound) arduboy.tunes.tone(TON_COUNTDOWN_FREQ, TON_COUNTDOWN_DAUER);
+    if (sound) arduboy.tone(TON_COUNTDOWN_FREQ, TON_COUNTDOWN_DAUER);
     delay(COUNTDOWN_VERZOEGERUNG);
     }
-  if (sound) arduboy.tunes.tone(TON_KICKOFF_FREQ, TON_KICKOFF_DAUER); // Und los geht das Spiel (mit Kickoffsound bei erster Ballbewegung (falls sound==true))
+  if (sound) arduboy.tone(TON_KICKOFF_FREQ, TON_KICKOFF_DAUER); // Und los geht das Spiel (mit Kickoffsound bei erster Ballbewegung (falls sound==true))
 }
 
 // Lineare Interpolation, um einen Wert im Intervall (x0,x1) auf das Intervall (y0,y1) linear abzubilden.
@@ -591,17 +659,52 @@ float map_float(float x, float x0, float x1, float y0, float y1) {
 
 // Einmalige Initialisierung bei Programmstart
 void setup() {
-//  arduboy.begin();
-  arduboy.beginNoLogo();                                      // Initialisiere arduboy, aber zeige kein Logo
-  arduboy.setFrameRate(FPS);                                  // Setze die Framerate
+  arduboy.begin();
+  // arduboy.beginNoLogo();                                   // Initialisiere arduboy, aber zeige kein Logo
   arduboy.initRandomSeed();                                   // Initialisiere den Pseudozufallszahlengenerator, so dass bei jedem Start andere "Zufallszahlen" für Abschlag, AI, etc. geählt werden.
+
+  // Serial.begin(115200);
+  // while ( !Serial ) delay(10);   // for nrf52840 with native usb
+
+  // Serial.println(F("Adafruit Bluefruit52 Controller App Example"));
+  // Serial.println(F("-------------------------------------------"));
+
+  Bluefruit.begin();
+  Bluefruit.setTxPower(4);    // Check bluefruit.h for supported values
+  Bluefruit.setName("Bluefruit52");
+
+  // To be consistent OTA DFU should be added first if it exists
+  bledfu.begin();
+
+  // Configure and start the BLE Uart service
+  bleuart.begin();
+
+  // Set up and start advertising
+  startAdv();
+
+  // Serial.println(F("Please use Adafruit Bluefruit LE app to connect in Controller mode"));
+  // Serial.println(F("Then activate/use the sensors, color picker, game controller, etc!"));
+  // Serial.println();  
 }
 
 // Hauptprogramm
 void loop() {
-  // Warte bis der nächste Frame zu zeichnen ist
-  if (!(arduboy.nextFrame()))
-    return;
+  uint8_t len = readPacket(&bleuart, 15);
+
+  // Buttons
+  if (len > 0 && packetbuffer[1] == 'B') {
+    uint8_t buttnum = packetbuffer[2] - '1';
+    boolean pressed = packetbuffer[3] - '0';
+    if (pressed) {
+      player2Buttons |= bit(buttnum);
+    } else {
+      player2Buttons &= ~(bit(buttnum));
+    }
+    // Serial.println(player2Buttons, BIN);
+  }
+
+  // handle tone duration
+  arduboy.timer();
     
   // Lösche Bildschirminhalt
   arduboy.clear();
